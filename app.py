@@ -28,6 +28,35 @@ PERPLEXITY_API_KEY = st.secrets.get("PERPLEXITY_API_KEY", "")
 SYRACUSE_BASE_URL = "https://syracuse.1145.am"
 PERPLEXITY_ENDPOINT = "https://api.perplexity.ai/chat/completions"
 
+
+def check_password():
+    """Show a login form and return True if the user has entered valid credentials."""
+    if st.session_state.get("authenticated"):
+        return True
+
+    credentials = st.secrets.get("credentials", {})
+    if not credentials:
+        return True  # no credentials configured, skip auth
+
+    with st.form("login"):
+        st.title("Login")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Log in")
+
+    if submitted:
+        if credentials.get(username) == password:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Invalid username or password")
+
+    return False
+
+
+if not check_password():
+    st.stop()
+
 st.title("News Comparison")
 
 
