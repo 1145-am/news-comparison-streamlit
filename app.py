@@ -85,3 +85,8 @@ with col_in:
 
 with col_location:
     st.selectbox("Location", options=LOCATIONS, key="location")
+
+if st.button("Get News", disabled=not (st.session_state["category_text"].strip() and st.session_state["location"])):
+    industry = f"{st.session_state['industry_prefix']} {st.session_state['category_text']}".strip()
+    location = st.session_state["location"]
+    st.markdown(f"Fetching news for **{industry}** in **{location}**....")
