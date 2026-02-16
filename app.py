@@ -1,5 +1,6 @@
 import json
 import random
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -10,14 +11,16 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / ".venv" / "examples" / "config.py"
 
-# Load config
-config_vars = {}
+# Load config: local file for dev, st.secrets for deployment
 if CONFIG_PATH.exists():
     config_vars = runpy.run_path(str(CONFIG_PATH))
-
-LOCATIONS = config_vars.get("LOCATIONS", ["North America", "Europe"])
-CATEGORIES = config_vars.get("CATEGORIES", {})
-INDUSTRY_PREFIXES = config_vars.get("INDUSTRY_PREFIXES", ["Packaging"])
+    LOCATIONS = config_vars.get("LOCATIONS", ["North America", "Europe"])
+    CATEGORIES = config_vars.get("CATEGORIES", {})
+    INDUSTRY_PREFIXES = config_vars.get("INDUSTRY_PREFIXES", ["Packaging"])
+else:
+    LOCATIONS = json.loads(st.secrets.get("LOCATIONS_JSON", '["North America", "Europe"]'))
+    CATEGORIES = json.loads(st.secrets.get("CATEGORIES_JSON", "{}"))
+    INDUSTRY_PREFIXES = json.loads(st.secrets.get("INDUSTRY_PREFIXES_JSON", '["Packaging"]'))
 
 SYRACUSE_API_KEY = st.secrets.get("SYRACUSE_API_KEY", "")
 PERPLEXITY_API_KEY = st.secrets.get("PERPLEXITY_API_KEY", "")
@@ -32,15 +35,21 @@ st.title("News Comparison")
 
 
 def fetch_syracuse(industry: str, location: str) -> dict:
-    """Fetch stories from Syracuse API."""
-    response = httpx.get(
-        f"{SYRACUSE_BASE_URL}/api/v1/stories/",
-        headers={"Authorization": f"Token {SYRACUSE_API_KEY}"},
-        params={"industry": industry, "location": location, "days_ago": 30},
-        timeout=120.0,
-    )
-    response.raise_for_status()
-    return response.json()
+    """Fetch all stories from Syracuse API, following pagination."""
+    headers = {"Authorization": f"Token {SYRACUSE_API_KEY}"}
+    params = {"industry": industry, "location": location, "days_ago": 30}
+    all_results = []
+
+    url = f"{SYRACUSE_BASE_URL}/api/v1/stories/industry-location/"
+    while url:
+        response = httpx.get(url, headers=headers, params=params, timeout=120.0)
+        response.raise_for_status()
+        data = response.json()
+        all_results.extend(data.get("results", []))
+        url = data.get("next")
+        params = None  # next URL includes query params already
+
+    return {"count": len(all_results), "results": all_results}
 
 
 def fetch_perplexity(industry: str, location: str) -> list:
@@ -117,8 +126,8 @@ def fetch_perplexity(industry: str, location: str) -> list:
 def render_syracuse_results(data: dict):
     """Render Syracuse stories."""
     stories = data.get("results", [])
-    st.markdown(f"**{data.get('count', len(stories))} stories found**")
-    for story in stories:
+    st.markdown(f"**{data.get('count', len(stories))} stories found** (showing up to 20)")
+    for story in stories[:20]:
         st.markdown(f"**{story['headline']}**")
         st.caption(
             f"{story.get('activity_class', '')} | "
@@ -136,8 +145,8 @@ def render_syracuse_results(data: dict):
 
 def render_perplexity_results(articles: list):
     """Render Perplexity articles."""
-    st.markdown(f"**{len(articles)} articles found**")
-    for article in articles:
+    st.markdown(f"**{len(articles)} articles found** (showing up to 20)")
+    for article in articles[:20]:
         st.markdown(f"**{article['headline']}**")
         st.caption(
             f"{article.get('published_date', 'N/A')} | "
@@ -218,22 +227,34 @@ with col_location:
 if st.button("Get News", disabled=not (st.session_state["category_text"].strip() and st.session_state["location"])):
     industry = f"{st.session_state['industry_prefix']} {st.session_state['category_text']}".strip()
     location = st.session_state["location"]
-    st.markdown(f"Fetching news for **{industry}** in **{location}**....")
+    st.markdown(f"Fetching news for **{industry}** in **{location}** ....")
 
     col_left, col_right = st.columns(2)
 
     with col_left:
         st.subheader("Syracuse")
-        try:
-            syracuse_data = fetch_syracuse(industry, location)
-            render_syracuse_results(syracuse_data)
-        except Exception as e:
-            st.error(f"Syracuse error: {e}")
+        with st.spinner("Querying Syracuse ..."):
+            try:
+                t0 = time.time()
+                syracuse_data = fetch_syracuse(industry, location)
+                elapsed = time.time() - t0
+                st.caption(f"Query took {elapsed:.1f}s")
+                render_syracuse_results(syracuse_data)
+            except httpx.HTTPStatusError as e:
+                st.error(f"Syracuse error ({e.response.status_code}): {e.response.text}")
+            except Exception as e:
+                st.error(f"Syracuse error: {e}")
 
     with col_right:
         st.subheader("Perplexity")
-        try:
-            perplexity_articles = fetch_perplexity(industry, location)
-            render_perplexity_results(perplexity_articles)
-        except Exception as e:
-            st.error(f"Perplexity error: {e}")
+        with st.spinner("Querying Perplexity ..."):
+            try:
+                t0 = time.time()
+                perplexity_articles = fetch_perplexity(industry, location)
+                elapsed = time.time() - t0
+                st.caption(f"Query took {elapsed:.1f}s")
+                render_perplexity_results(perplexity_articles)
+            except httpx.HTTPStatusError as e:
+                st.error(f"Perplexity error ({e.response.status_code}): {e.response.text}")
+            except Exception as e:
+                st.error(f"Perplexity error: {e}")
