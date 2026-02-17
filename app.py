@@ -16,11 +16,9 @@ if CONFIG_PATH.exists():
     config_vars = runpy.run_path(str(CONFIG_PATH))
     LOCATIONS = config_vars.get("LOCATIONS", ["North America", "Europe"])
     CATEGORIES = config_vars.get("CATEGORIES", {})
-    INDUSTRY_PREFIXES = config_vars.get("INDUSTRY_PREFIXES", ["Packaging"])
 else:
     LOCATIONS = json.loads(st.secrets.get("LOCATIONS_JSON", '["North America", "Europe"]'))
     CATEGORIES = json.loads(st.secrets.get("CATEGORIES_JSON", "{}"))
-    INDUSTRY_PREFIXES = json.loads(st.secrets.get("INDUSTRY_PREFIXES_JSON", '["Packaging"]'))
 
 SYRACUSE_API_KEY = st.secrets.get("SYRACUSE_API_KEY", "")
 PERPLEXITY_API_KEY = st.secrets.get("PERPLEXITY_API_KEY", "")
@@ -169,6 +167,9 @@ def render_syracuse_results(data: dict):
         url = story.get("document_url", "")
         if url:
             st.markdown(f"[Source]({url})")
+        syracuse_uri = story.get("uri", "")
+        if syracuse_uri:
+            st.markdown(f"[View on Syracuse]({SYRACUSE_BASE_URL}/api/v1/stories/{syracuse_uri})")
         st.divider()
 
 
@@ -218,8 +219,6 @@ def pick_random_category(categories):
 
 # --- Session state ---
 
-if "industry_prefix" not in st.session_state:
-    st.session_state["industry_prefix"] = ""
 if "category_text" not in st.session_state:
     st.session_state["category_text"] = ""
 if "location" not in st.session_state:
@@ -227,7 +226,6 @@ if "location" not in st.session_state:
 
 
 def do_randomize():
-    st.session_state["industry_prefix"] = random.choice(INDUSTRY_PREFIXES) + ":"
     st.session_state["category_text"] = pick_random_category(CATEGORIES)
     st.session_state["location"] = random.choice(LOCATIONS) if LOCATIONS else ""
 
@@ -236,10 +234,9 @@ def do_randomize():
 
 st.button("Randomize", on_click=do_randomize)
 
-col_prefix, col_category, col_in, col_location = st.columns([2, 6, 0.3, 2])
+col_category, col_in, col_location = st.columns([6, 0.3, 2])
 
-with col_prefix:
-    st.text_input("Industry Prefix", key="industry_prefix")
+st.markdown("Feel free to change the category and location how you want.")
 
 with col_category:
     st.text_input("Category", key="category_text")
@@ -254,7 +251,7 @@ with col_location:
     st.selectbox("Location", options=LOCATIONS, key="location")
 
 if st.button("Get News", disabled=not (st.session_state["category_text"].strip() and st.session_state["location"])):
-    industry = f"{st.session_state['industry_prefix']} {st.session_state['category_text']}".strip()
+    industry = st.session_state['category_text'].strip()
     location = st.session_state["location"]
     st.markdown(f"Fetching news for **{industry}** in **{location}** ....")
 
