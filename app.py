@@ -10,6 +10,7 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / ".venv" / "examples" / "config.py"
+NUM_DAYS = 90
 
 # Load config: local file for dev, st.secrets for deployment
 if CONFIG_PATH.exists():
@@ -57,14 +58,19 @@ if not check_password():
 
 st.title("News Comparison")
 
-
+st.markdown(
+    "This app compares news results from Syracuse and Perplexity APIs side by side. "
+    "Enter a procurement category and location, then click 'Get News' to see the results. "
+    "You can also click 'Randomize' to fill in random categories and locations. "
+    "Shows news up to 90 days old."
+)
 # --- API functions ---
 
 
 def fetch_syracuse(industry: str, location: str) -> dict:
     """Fetch all stories from Syracuse API, following pagination."""
     headers = {"Authorization": f"Token {SYRACUSE_API_KEY}"}
-    params = {"industry": industry, "location": location, "days_ago": 30}
+    params = {"industry": industry, "location": location, "days_ago": NUM_DAYS}
     all_results = []
 
     url = f"{SYRACUSE_BASE_URL}/api/v1/stories/industry-location/"
@@ -82,7 +88,7 @@ def fetch_syracuse(industry: str, location: str) -> dict:
 def fetch_perplexity(industry: str, location: str) -> list:
     """Fetch news from Perplexity API."""
     max_date = date.today()
-    min_date = max_date - timedelta(days=30)
+    min_date = max_date - timedelta(days=NUM_DAYS)
 
     system_command = (
         f"You are a market research analyst with deep knowledge of what a "
@@ -165,11 +171,10 @@ def render_syracuse_results(data: dict):
         if extract:
             st.write(extract[:300] + ("..." if len(extract) > 300 else ""))
         url = story.get("document_url", "")
-        if url:
-            st.markdown(f"[Source]({url})")
+        url_markdown = f"[Source]({url})" if url else "No source URL"
         syracuse_uri = story.get("uri", "")
-        if syracuse_uri:
-            st.markdown(f"[View on Syracuse]({SYRACUSE_BASE_URL}/api/v1/stories/{syracuse_uri})")
+        syracuse_markdown = f"[View on Syracuse]({SYRACUSE_BASE_URL}/api/v1/stories/{syracuse_uri})" if syracuse_uri else "No Syracuse URI"
+        st.markdown(f"{url_markdown} | {syracuse_markdown}")
         st.divider()
 
 
