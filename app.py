@@ -67,6 +67,15 @@ st.markdown(
 # --- API functions ---
 
 
+def fetch_syracuse_story(uri: str) -> dict:
+    """Fetch a single Syracuse story by URI."""
+    headers = {"Authorization": f"Token {SYRACUSE_API_KEY}"}
+    url = f"{SYRACUSE_BASE_URL}/api/v1/stories/{uri}"
+    response = httpx.get(url, headers=headers, timeout=30.0, follow_redirects=True)
+    response.raise_for_status()
+    return response.json()
+
+
 def fetch_syracuse(industry: str, location: str) -> dict:
     """Fetch all stories from Syracuse API, following pagination."""
     headers = {"Authorization": f"Token {SYRACUSE_API_KEY}"}
@@ -156,6 +165,15 @@ def fetch_perplexity(industry: str, location: str) -> list:
 # --- Display helpers ---
 
 
+@st.dialog("Story Detail", width="large")
+def show_syracuse_story_dialog(uri: str):
+    try:
+        story_data = fetch_syracuse_story(uri)
+        st.json(story_data)
+    except Exception as e:
+        st.error(f"Failed to load story: {e}")
+
+
 def render_syracuse_results(data: dict):
     """Render Syracuse stories."""
     stories = data.get("results", [])
@@ -172,9 +190,11 @@ def render_syracuse_results(data: dict):
             st.write(extract[:300] + ("..." if len(extract) > 300 else ""))
         url = story.get("document_url", "")
         url_markdown = f"[Source]({url})" if url else "No source URL"
+        st.markdown(url_markdown)
         syracuse_uri = story.get("uri", "")
-        syracuse_markdown = f"[View on Syracuse]({SYRACUSE_BASE_URL}/api/v1/stories/{syracuse_uri})" if syracuse_uri else "No Syracuse URI"
-        st.markdown(f"{url_markdown} | {syracuse_markdown}")
+        if syracuse_uri:
+            if st.button("View in Syracuse", key=f"syracuse_{syracuse_uri}"):
+                show_syracuse_story_dialog(syracuse_uri)
         st.divider()
 
 
@@ -228,6 +248,10 @@ if "category_text" not in st.session_state:
     st.session_state["category_text"] = ""
 if "location" not in st.session_state:
     st.session_state["location"] = LOCATIONS[0] if LOCATIONS else ""
+if "syracuse_data" not in st.session_state:
+    st.session_state["syracuse_data"] = None
+if "perplexity_articles" not in st.session_state:
+    st.session_state["perplexity_articles"] = None
 
 
 def do_randomize():
@@ -258,34 +282,44 @@ with col_location:
 if st.button("Get News", disabled=not (st.session_state["category_text"].strip() and st.session_state["location"])):
     industry = st.session_state['category_text'].strip()
     location = st.session_state["location"]
-    st.markdown(f"Fetching news for **{industry}** in **{location}** ....")
+    st.session_state["syracuse_data"] = None
+    st.session_state["perplexity_articles"] = None
 
     col_left, col_right = st.columns(2)
 
     with col_left:
-        st.subheader("Syracuse")
         with st.spinner("Querying Syracuse ..."):
             try:
                 t0 = time.time()
-                syracuse_data = fetch_syracuse(industry, location)
-                elapsed = time.time() - t0
-                st.caption(f"Query took {elapsed:.1f}s")
-                render_syracuse_results(syracuse_data)
+                st.session_state["syracuse_data"] = fetch_syracuse(industry, location)
+                st.session_state["syracuse_elapsed"] = time.time() - t0
             except httpx.HTTPStatusError as e:
                 st.error(f"Syracuse error ({e.response.status_code}): {e.response.text}")
             except Exception as e:
                 st.error(f"Syracuse error: {e}")
 
     with col_right:
-        st.subheader("Perplexity")
         with st.spinner("Querying Perplexity ..."):
             try:
                 t0 = time.time()
-                perplexity_articles = fetch_perplexity(industry, location)
-                elapsed = time.time() - t0
-                st.caption(f"Query took {elapsed:.1f}s")
-                render_perplexity_results(perplexity_articles)
+                st.session_state["perplexity_articles"] = fetch_perplexity(industry, location)
+                st.session_state["perplexity_elapsed"] = time.time() - t0
             except httpx.HTTPStatusError as e:
                 st.error(f"Perplexity error ({e.response.status_code}): {e.response.text}")
             except Exception as e:
                 st.error(f"Perplexity error: {e}")
+
+if st.session_state["syracuse_data"] is not None or st.session_state["perplexity_articles"] is not None:
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.subheader("Syracuse")
+        if st.session_state["syracuse_data"] is not None:
+            st.caption(f"Query took {st.session_state.get('syracuse_elapsed', 0):.1f}s")
+            render_syracuse_results(st.session_state["syracuse_data"])
+
+    with col_right:
+        st.subheader("Perplexity")
+        if st.session_state["perplexity_articles"] is not None:
+            st.caption(f"Query took {st.session_state.get('perplexity_elapsed', 0):.1f}s")
+            render_perplexity_results(st.session_state["perplexity_articles"])
