@@ -79,7 +79,11 @@ def fetch_syracuse_story(uri: str) -> dict:
 def fetch_syracuse(industry: str, location: str) -> dict:
     """Fetch all stories from Syracuse API, following pagination."""
     headers = {"Authorization": f"Token {SYRACUSE_API_KEY}"}
-    params = {"industry": industry, "location": location, "days_ago": NUM_DAYS}
+    params = {"days_ago": NUM_DAYS}
+    if industry and industry != "All":
+        params["industry"] = industry
+    if location and location != "All":
+        params["location"] = location
     all_results = []
 
     url = f"{SYRACUSE_BASE_URL}/api/v1/stories/industry-location/"
@@ -88,10 +92,42 @@ def fetch_syracuse(industry: str, location: str) -> dict:
         response.raise_for_status()
         data = response.json()
         all_results.extend(data.get("results", []))
+        if len(all_results) >= 20:
+            break
         url = data.get("next")
         params = None  # next URL includes query params already
 
     return {"count": len(all_results), "results": all_results}
+
+
+def build_user_command(industry: str, location: str) -> str:
+    # Handle multiple industries if comma-separated
+    if ',' in industry:
+        industries_text = f"the following industries: {industry}"
+        industry_context = "these industries"
+    else:
+        industries_text = industry
+        industry_context = "this industry"
+
+    # Handle multiple locations if comma-separated
+    if ',' in location:
+        locations_text = f"the following locations: {location}"
+    else:
+        locations_text = location
+
+    suppliers_text = (
+        f"First identify top 5-7 suppliers in {industry_context}, then find recent news about them"
+    )
+
+    user_command = (
+        f"I am a procurement category manager for {industries_text} in {locations_text}. "
+        f"{suppliers_text} and relevant industry news. "
+        f"Focus on finance, partnerships, innovations, risks, and regulatory changes "
+        f"for procurement strategy and supplier negotiations. "
+        f"Output JSON objects with: headline, summary_text, published_date, published_by, document_url"
+    )
+
+    return user_command
 
 
 def fetch_perplexity(industry: str, location: str) -> list:
@@ -99,22 +135,15 @@ def fetch_perplexity(industry: str, location: str) -> list:
     max_date = date.today()
     min_date = max_date - timedelta(days=NUM_DAYS)
 
+    # Expand "All" values
+    effective_industry = ", ".join(CATEGORIES.keys()) if industry == "All" else industry
+    effective_location = ", ".join(LOCATIONS) if location == "All" else location
+
     system_command = (
         f"You are a market research analyst with deep knowledge of what a "
-        f"procurement category manager in the {industry} industry needs."
+        f"procurement category manager in the {effective_industry} industry needs."
     )
-    user_command = (
-        f"I need you to produce a list of suppliers for industry: {industry} "
-        f"in location: {location}. Then find recent news articles for these suppliers. "
-        "Focus on topics like corporate finance, partnerships, product innovations, "
-        "supplier risk and regulatory changes that I can use in preparing my "
-        "procurement strategy, risk management and supplier negotiations. "
-        "For each source cited in your response, provide a separate summary of "
-        "that source's content. Prioritise more recent news articles. "
-        "Please output a list of JSON objects with one JSON object per source "
-        "with the following fields: headline, summary_text, published_date, "
-        "published_by, document_url"
-    )
+    user_command = build_user_command(effective_industry, effective_location)
 
     payload = {
         "model": "sonar",
@@ -246,6 +275,10 @@ def pick_random_category(categories):
 
 if "category_text" not in st.session_state:
     st.session_state["category_text"] = ""
+if "all_industries" not in st.session_state:
+    st.session_state["all_industries"] = False
+if "all_locations" not in st.session_state:
+    st.session_state["all_locations"] = False
 if "location" not in st.session_state:
     st.session_state["location"] = LOCATIONS[0] if LOCATIONS else ""
 if "syracuse_data" not in st.session_state:
@@ -257,6 +290,8 @@ if "perplexity_articles" not in st.session_state:
 def do_randomize():
     st.session_state["category_text"] = pick_random_category(CATEGORIES)
     st.session_state["location"] = random.choice(LOCATIONS) if LOCATIONS else ""
+    st.session_state["all_industries"] = False
+    st.session_state["all_locations"] = False
 
 
 # --- UI ---
@@ -268,7 +303,8 @@ col_category, col_in, col_location = st.columns([6, 0.3, 2])
 st.markdown("Feel free to change the category and location how you want.")
 
 with col_category:
-    st.text_input("Category", key="category_text")
+    st.text_input("Category", key="category_text", disabled=st.session_state["all_industries"])
+    st.checkbox("All industries", key="all_industries")
 
 with col_in:
     st.markdown(
@@ -277,11 +313,14 @@ with col_in:
     )
 
 with col_location:
-    st.selectbox("Location", options=LOCATIONS, key="location")
+    st.selectbox("Location", options=LOCATIONS, key="location", disabled=st.session_state["all_locations"])
+    st.checkbox("All locations", key="all_locations")
 
-if st.button("Get News", disabled=not (st.session_state["category_text"].strip() and st.session_state["location"])):
-    industry = st.session_state['category_text'].strip()
-    location = st.session_state["location"]
+has_industry = st.session_state["all_industries"] or bool(st.session_state["category_text"].strip())
+has_location = st.session_state["all_locations"] or bool(st.session_state["location"])
+if st.button("Get News", disabled=not (has_industry and has_location)):
+    industry = "All" if st.session_state["all_industries"] else st.session_state['category_text'].strip()
+    location = "All" if st.session_state["all_locations"] else st.session_state["location"]
     st.session_state["syracuse_data"] = None
     st.session_state["perplexity_articles"] = None
 
