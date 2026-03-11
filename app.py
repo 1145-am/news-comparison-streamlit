@@ -285,6 +285,8 @@ if "syracuse_data" not in st.session_state:
     st.session_state["syracuse_data"] = None
 if "perplexity_articles" not in st.session_state:
     st.session_state["perplexity_articles"] = None
+if "use_perplexity" not in st.session_state:
+    st.session_state["use_perplexity"] = True
 
 
 def do_randomize():
@@ -295,6 +297,9 @@ def do_randomize():
 
 
 # --- UI ---
+
+with st.sidebar:
+    st.checkbox("Use Perplexity", key="use_perplexity")
 
 st.button("Randomize", on_click=do_randomize)
 
@@ -337,16 +342,17 @@ if st.button("Get News", disabled=not (has_industry and has_location)):
             except Exception as e:
                 st.error(f"Syracuse error: {e}")
 
-    with col_right:
-        with st.spinner("Querying Perplexity ..."):
-            try:
-                t0 = time.time()
-                st.session_state["perplexity_articles"] = fetch_perplexity(industry, location)
-                st.session_state["perplexity_elapsed"] = time.time() - t0
-            except httpx.HTTPStatusError as e:
-                st.error(f"Perplexity error ({e.response.status_code}): {e.response.text}")
-            except Exception as e:
-                st.error(f"Perplexity error: {e}")
+    if st.session_state["use_perplexity"]:
+        with col_right:
+            with st.spinner("Querying Perplexity ..."):
+                try:
+                    t0 = time.time()
+                    st.session_state["perplexity_articles"] = fetch_perplexity(industry, location)
+                    st.session_state["perplexity_elapsed"] = time.time() - t0
+                except httpx.HTTPStatusError as e:
+                    st.error(f"Perplexity error ({e.response.status_code}): {e.response.text}")
+                except Exception as e:
+                    st.error(f"Perplexity error: {e}")
 
 if st.session_state["syracuse_data"] is not None or st.session_state["perplexity_articles"] is not None:
     col_left, col_right = st.columns(2)
