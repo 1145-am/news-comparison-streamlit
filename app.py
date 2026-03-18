@@ -1,32 +1,25 @@
-import json
 import random
 import time
-from datetime import date, timedelta
 
 import httpx
 import streamlit as st
 
-NUM_DAYS = 90
+st.set_page_config(layout="wide", page_title="News Comparison")
 
-LOCATIONS = json.loads(st.secrets.get("LOCATIONS_JSON", '["North America", "Europe"]'))
-CATEGORIES = json.loads(st.secrets.get("CATEGORIES_JSON", "{}"))
-COMPANIES = list(st.secrets.get("COMPANIES", []))
+from config import LOCATIONS, CATEGORIES, COMPANIES  # noqa: E402
+from providers import PROVIDER_CONFIG, fetch_syracuse_story  # noqa: E402
 
-SYRACUSE_API_KEY = st.secrets.get("SYRACUSE_API_KEY", "")
-PERPLEXITY_API_KEY = st.secrets.get("PERPLEXITY_API_KEY", "")
 
-SYRACUSE_BASE_URL = st.secrets.get("SYRACUSE_BASE_URL", "https://syracuse.1145.am")
-PERPLEXITY_ENDPOINT = "https://api.perplexity.ai/chat/completions"
+# --- Auth ---
 
 
 def check_password():
-    """Show a login form and return True if the user has entered valid credentials."""
     if st.session_state.get("authenticated"):
         return True
 
     credentials = st.secrets.get("credentials", {})
     if not credentials:
-        return True  # no credentials configured, skip auth
+        return True
 
     with st.form("login"):
         st.title("Login")
@@ -47,239 +40,19 @@ def check_password():
 if not check_password():
     st.stop()
 
-st.title("News Comparison")
 
-st.markdown(
-    "Compare news from Syracuse and Perplexity side by side. "
-    "Search by procurement category and location, or by company name. "
-    "Click 'Randomize' to pick a random category or company. "
-    "Shows news up to 90 days old."
-)
-# --- API functions ---
-
-
-def fetch_syracuse_story(uri: str) -> dict:
-    """Fetch a single Syracuse story by URI."""
-    headers = {"Authorization": f"Token {SYRACUSE_API_KEY}"}
-    url = f"{SYRACUSE_BASE_URL}/api/v1/stories/{uri}"
-    response = httpx.get(url, headers=headers, timeout=30.0, follow_redirects=True)
-    response.raise_for_status()
-    return response.json()
-
-
-def fetch_syracuse(industry: str, location: str) -> dict:
-    """Fetch all stories from Syracuse API, following pagination."""
-    headers = {"Authorization": f"Token {SYRACUSE_API_KEY}"}
-    params = {"days_ago": NUM_DAYS}
-    if industry and industry != "All":
-        params["industry"] = industry
-    if location and location != "All":
-        params["location"] = location
-    all_results = []
-
-    url = f"{SYRACUSE_BASE_URL}/api/v1/stories/industry-location/"
-    while url:
-        response = httpx.get(url, headers=headers, params=params, timeout=120.0)
-        response.raise_for_status()
-        data = response.json()
-        all_results.extend(data.get("results", []))
-        if len(all_results) >= 20:
-            break
-        url = data.get("next")
-        params = None  # next URL includes query params already
-
-    return {"count": len(all_results), "results": all_results}
-
-
-def build_user_command(industry: str, location: str) -> str:
-    # Handle multiple industries if comma-separated
-    if ',' in industry:
-        industries_text = f"the following industries: {industry}"
-        industry_context = "these industries"
-    else:
-        industries_text = industry
-        industry_context = "this industry"
-
-    # Handle multiple locations if comma-separated
-    if ',' in location:
-        locations_text = f"the following locations: {location}"
-    else:
-        locations_text = location
-
-    suppliers_text = (
-        f"First identify top 5-7 suppliers in {industry_context}, then find recent news about them"
-    )
-
-    user_command = (
-        f"I am a procurement category manager for {industries_text} in {locations_text}. "
-        f"{suppliers_text} and relevant industry news. "
-        f"Focus on finance, partnerships, innovations, risks, and regulatory changes "
-        f"for procurement strategy and supplier negotiations. "
-        f"Output JSON objects with: headline, summary_text, published_date, published_by, document_url"
-    )
-
-    return user_command
-
-
-def fetch_syracuse_company(company: str) -> dict:
-    """Fetch stories from Syracuse API by company/organisation name."""
-    headers = {"Authorization": f"Token {SYRACUSE_API_KEY}"}
-    params = {"days_ago": NUM_DAYS, "org_name": company}
-    all_results = []
-
-    url = f"{SYRACUSE_BASE_URL}/api/v1/stories/organization/"
-    while url:
-        response = httpx.get(url, headers=headers, params=params, timeout=120.0)
-        response.raise_for_status()
-        data = response.json()
-        all_results.extend(data.get("results", []))
-        if len(all_results) >= 20:
-            break
-        url = data.get("next")
-        params = None
-
-    return {"count": len(all_results), "results": all_results}
-
-
-def fetch_perplexity_company(company: str) -> list:
-    """Fetch company news from Perplexity API."""
-    max_date = date.today()
-    min_date = max_date - timedelta(days=NUM_DAYS)
-
-    system_command = (
-        "You are a market research analyst helping a procurement team assess supplier risk and opportunity."
-    )
-    user_command = (
-        f"I need you to find recent news articles for {company}. "
-        "Focus on topics like corporate finance, partnerships, product innovations, supplier risk and regulatory changes "
-        "that I can use in preparing my procurement strategy, risk management and supplier negotiations. "
-        "For each source cited in your response, provide a separate summary of that source's content. "
-        "Prioritise more recent news articles. "
-        "Please output a list of JSON objects with one JSON object per source with the following fields: "
-        "headline, summary_text, published_date, published_by, document_url"
-    )
-
-    payload = {
-        "model": "sonar",
-        "messages": [
-            {"role": "system", "content": system_command},
-            {"role": "user", "content": user_command},
-        ],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "schema": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "headline": {"type": "string"},
-                            "summary_text": {"type": "string"},
-                            "published_date": {"type": "string", "format": "date-time"},
-                            "published_by": {"type": "string"},
-                            "document_url": {"type": "string"},
-                        },
-                        "required": [
-                            "headline", "summary_text", "published_date",
-                            "published_by", "document_url",
-                        ],
-                    },
-                },
-            },
-        },
-        "web_search_options": {"search_context_size": "medium"},
-        "search_after_date_filter": min_date.strftime("%m/%d/%Y"),
-        "search_before_date_filter": max_date.strftime("%m/%d/%Y"),
-    }
-
-    response = httpx.post(
-        PERPLEXITY_ENDPOINT,
-        headers={"Authorization": f"Bearer {PERPLEXITY_API_KEY}"},
-        json=payload,
-        timeout=300.0,
-    )
-    response.raise_for_status()
-    data = response.json()
-    content = data["choices"][0]["message"]["content"]
-    articles = json.loads(content)
-    return sorted(articles, key=lambda x: x.get("published_date", ""), reverse=True)
-
-
-def fetch_perplexity(industry: str, location: str) -> list:
-    """Fetch news from Perplexity API."""
-    max_date = date.today()
-    min_date = max_date - timedelta(days=NUM_DAYS)
-
-    # Expand "All" values
-    effective_industry = ", ".join(CATEGORIES.keys()) if industry == "All" else industry
-    effective_location = ", ".join(LOCATIONS) if location == "All" else location
-
-    system_command = (
-        f"You are a market research analyst with deep knowledge of what a "
-        f"procurement category manager in the {effective_industry} industry needs."
-    )
-    user_command = build_user_command(effective_industry, effective_location)
-
-    payload = {
-        "model": "sonar",
-        "messages": [
-            {"role": "system", "content": system_command},
-            {"role": "user", "content": user_command},
-        ],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "schema": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "headline": {"type": "string"},
-                            "summary_text": {"type": "string"},
-                            "published_date": {"type": "string", "format": "date-time"},
-                            "published_by": {"type": "string"},
-                            "document_url": {"type": "string"},
-                        },
-                        "required": [
-                            "headline", "summary_text", "published_date",
-                            "published_by", "document_url",
-                        ],
-                    },
-                },
-            },
-        },
-        "web_search_options": {"search_context_size": "medium"},
-        "search_after_date_filter": min_date.strftime("%m/%d/%Y"),
-        "search_before_date_filter": max_date.strftime("%m/%d/%Y"),
-    }
-
-    response = httpx.post(
-        PERPLEXITY_ENDPOINT,
-        headers={"Authorization": f"Bearer {PERPLEXITY_API_KEY}"},
-        json=payload,
-        timeout=300.0,
-    )
-    response.raise_for_status()
-    data = response.json()
-    content = data["choices"][0]["message"]["content"]
-    articles = json.loads(content)
-    return sorted(articles, key=lambda x: x.get("published_date", ""), reverse=True)
-
-
-# --- Display helpers ---
+# --- Display ---
 
 
 @st.dialog("Story Detail", width="large")
 def show_syracuse_story_dialog(uri: str):
     try:
-        story_data = fetch_syracuse_story(uri)
-        st.json(story_data)
+        st.json(fetch_syracuse_story(uri))
     except Exception as e:
         st.error(f"Failed to load story: {e}")
 
 
 def render_syracuse_results(data: dict):
-    """Render Syracuse stories."""
     stories = data.get("results", [])
     st.markdown(f"**{data.get('count', len(stories))} stories found** (showing up to 20)")
     for story in stories[:20]:
@@ -293,17 +66,14 @@ def render_syracuse_results(data: dict):
         if extract:
             st.write(extract[:300] + ("..." if len(extract) > 300 else ""))
         url = story.get("document_url", "")
-        url_markdown = f"[Source]({url})" if url else "No source URL"
-        st.markdown(url_markdown)
-        syracuse_uri = story.get("uri", "")
-        if syracuse_uri:
-            if st.button("View in Syracuse", key=f"syracuse_{syracuse_uri}"):
-                show_syracuse_story_dialog(syracuse_uri)
+        st.markdown(f"[Source]({url})" if url else "No source URL")
+        if uri := story.get("uri", ""):
+            if st.button("View in Syracuse", key=f"syracuse_{uri}"):
+                show_syracuse_story_dialog(uri)
         st.divider()
 
 
-def render_perplexity_results(articles: list):
-    """Render Perplexity articles."""
+def render_articles(articles: list):
     st.markdown(f"**{len(articles)} articles found** (showing up to 20)")
     for article in articles[:20]:
         st.markdown(f"**{article['headline']}**")
@@ -312,21 +82,26 @@ def render_perplexity_results(articles: list):
             f"{article.get('published_by', 'N/A')}"
         )
         st.write(article.get("summary_text", ""))
-        url = article.get("document_url", "")
-        if url:
+        if url := article.get("document_url", ""):
             st.markdown(f"[Source]({url})")
         st.divider()
 
 
-# --- Category picker ---
+RENDER_FUNCS = {
+    "syracuse": render_syracuse_results,
+    "perplexity": render_articles,
+    "exa": render_articles,
+    "linkup": render_articles,
+}
+
+
+# --- Helpers ---
 
 
 def pick_random_category(categories):
-    """Pick a random category entry."""
     tops = list(categories.keys())
     if not tops:
         return ""
-
     if random.random() < 0.5:
         top = random.choice(tops)
         second_map = categories[top]
@@ -342,67 +117,66 @@ def pick_random_category(categories):
         leaves = second_map.get(second, [])
         if not leaves:
             return f"{second} ({top})"
-        leaf = random.choice(leaves)
-        return f"{leaf} ({top} - {second})"
+        return f"{random.choice(leaves)} ({top} - {second})"
 
 
 # --- Session state ---
 
-if "search_mode" not in st.session_state:
-    st.session_state["search_mode"] = "Category"
-if "company_text" not in st.session_state:
-    st.session_state["company_text"] = ""
-if "category_text" not in st.session_state:
-    st.session_state["category_text"] = ""
-if "all_industries" not in st.session_state:
-    st.session_state["all_industries"] = False
-if "all_locations" not in st.session_state:
-    st.session_state["all_locations"] = False
-if "location" not in st.session_state:
-    st.session_state["location"] = LOCATIONS[0] if LOCATIONS else ""
-if "syracuse_data" not in st.session_state:
-    st.session_state["syracuse_data"] = None
-if "perplexity_articles" not in st.session_state:
-    st.session_state["perplexity_articles"] = None
-if "use_perplexity" not in st.session_state:
-    st.session_state["use_perplexity"] = False
+_STATE_DEFAULTS = {
+    "search_mode": "Category",
+    "company_text": "",
+    "category_text": "",
+    "all_industries": False,
+    "all_locations": False,
+    "location": LOCATIONS[0] if LOCATIONS else "",
+    "use_syracuse": True,
+    "use_perplexity": False,
+    "use_exa": False,
+    "use_linkup": False,
+}
 
+for key, default in _STATE_DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
-def do_randomize():
-    st.session_state["category_text"] = pick_random_category(CATEGORIES)
-    st.session_state["location"] = random.choice(LOCATIONS) if LOCATIONS else ""
-    st.session_state["all_industries"] = False
-    st.session_state["all_locations"] = False
-
-
-def do_randomize_company():
-    st.session_state["company_text"] = random.choice(COMPANIES) if COMPANIES else ""
+for p in PROVIDER_CONFIG:
+    if p["data_key"] not in st.session_state:
+        st.session_state[p["data_key"]] = None
 
 
 # --- UI ---
 
+st.title("News Comparison")
+st.markdown(
+    "Compare news from Syracuse, Perplexity, Exa, and Linkup side by side. "
+    "Search by procurement category and location, or by company name. "
+    "Click 'Randomize' to pick a random category or company. "
+    "Shows news up to 90 days old."
+)
+
 with st.sidebar:
-    st.checkbox("Use Perplexity", key="use_perplexity")
+    st.subheader("Sources")
+    for p in PROVIDER_CONFIG:
+        st.checkbox(p["label"], key=f"use_{p['key']}")
 
 search_mode = st.radio("Search by", ["Category", "Company"], horizontal=True, key="search_mode")
 
 if search_mode == "Category":
-    st.button("Randomize", on_click=do_randomize)
+    st.button("Randomize", on_click=lambda: st.session_state.update({
+        "category_text": pick_random_category(CATEGORIES),
+        "location": random.choice(LOCATIONS) if LOCATIONS else "",
+        "all_industries": False,
+        "all_locations": False,
+    }))
 
     col_category, col_in, col_location = st.columns([6, 0.3, 2])
-
     st.markdown("Feel free to change the category and location how you want.")
 
     with col_category:
         st.text_input("Category", key="category_text", disabled=st.session_state["all_industries"])
         st.checkbox("All industries", key="all_industries")
-
     with col_in:
-        st.markdown(
-            "<div style='padding-top:2.35rem; text-align:center;'>in</div>",
-            unsafe_allow_html=True,
-        )
-
+        st.markdown("<div style='padding-top:2.35rem; text-align:center;'>in</div>", unsafe_allow_html=True)
     with col_location:
         st.selectbox("Location", options=LOCATIONS, key="location", disabled=st.session_state["all_locations"])
         st.checkbox("All locations", key="all_locations")
@@ -412,79 +186,45 @@ if search_mode == "Category":
     get_news_disabled = not (has_industry and has_location)
 
 else:
-    st.button("Randomize", on_click=do_randomize_company)
+    st.button("Randomize", on_click=lambda: st.session_state.update({
+        "company_text": random.choice(COMPANIES) if COMPANIES else ""
+    }))
     st.text_input("Company name", key="company_text")
     get_news_disabled = not bool(st.session_state["company_text"].strip())
 
-if st.button("Get News", disabled=get_news_disabled):
-    st.session_state["syracuse_data"] = None
-    st.session_state["perplexity_articles"] = None
+active_providers = [p for p in PROVIDER_CONFIG if st.session_state.get(f"use_{p['key']}")]
 
-    col_left, col_right = st.columns(2)
+if not active_providers:
+    st.warning("Select at least one source in the sidebar.")
 
-    if search_mode == "Company":
-        company = st.session_state["company_text"].strip()
-        with col_left:
-            with st.spinner("Querying Syracuse ..."):
+if st.button("Get News", disabled=get_news_disabled or not active_providers):
+    for p in PROVIDER_CONFIG:
+        st.session_state[p["data_key"]] = None
+
+    for col, provider in zip(st.columns(len(active_providers)), active_providers):
+        with col:
+            with st.spinner(f"Querying {provider['label']} ..."):
                 try:
                     t0 = time.time()
-                    st.session_state["syracuse_data"] = fetch_syracuse_company(company)
-                    st.session_state["syracuse_elapsed"] = time.time() - t0
+                    if search_mode == "Company":
+                        result = provider["fetch_company"](st.session_state["company_text"].strip())
+                    else:
+                        industry = "All" if st.session_state["all_industries"] else st.session_state["category_text"].strip()
+                        location = "All" if st.session_state["all_locations"] else st.session_state["location"]
+                        result = provider["fetch_category"](industry, location)
+                    st.session_state[provider["data_key"]] = result
+                    st.session_state[f"{provider['key']}_elapsed"] = time.time() - t0
                 except httpx.HTTPStatusError as e:
-                    st.error(f"Syracuse error ({e.response.status_code}): {e.response.text}")
+                    st.error(f"{provider['label']} error ({e.response.status_code}): {e.response.text}")
                 except Exception as e:
-                    st.error(f"Syracuse error: {e}")
+                    st.error(f"{provider['label']} error: {e}")
 
-        if st.session_state["use_perplexity"]:
-            with col_right:
-                with st.spinner("Querying Perplexity ..."):
-                    try:
-                        t0 = time.time()
-                        st.session_state["perplexity_articles"] = fetch_perplexity_company(company)
-                        st.session_state["perplexity_elapsed"] = time.time() - t0
-                    except httpx.HTTPStatusError as e:
-                        st.error(f"Perplexity error ({e.response.status_code}): {e.response.text}")
-                    except Exception as e:
-                        st.error(f"Perplexity error: {e}")
+providers_with_results = [p for p in PROVIDER_CONFIG if st.session_state.get(p["data_key"]) is not None]
 
-    else:
-        industry = "All" if st.session_state["all_industries"] else st.session_state['category_text'].strip()
-        location = "All" if st.session_state["all_locations"] else st.session_state["location"]
-
-        with col_left:
-            with st.spinner("Querying Syracuse ..."):
-                try:
-                    t0 = time.time()
-                    st.session_state["syracuse_data"] = fetch_syracuse(industry, location)
-                    st.session_state["syracuse_elapsed"] = time.time() - t0
-                except httpx.HTTPStatusError as e:
-                    st.error(f"Syracuse error ({e.response.status_code}): {e.response.text}")
-                except Exception as e:
-                    st.error(f"Syracuse error: {e}")
-
-        if st.session_state["use_perplexity"]:
-            with col_right:
-                with st.spinner("Querying Perplexity ..."):
-                    try:
-                        t0 = time.time()
-                        st.session_state["perplexity_articles"] = fetch_perplexity(industry, location)
-                        st.session_state["perplexity_elapsed"] = time.time() - t0
-                    except httpx.HTTPStatusError as e:
-                        st.error(f"Perplexity error ({e.response.status_code}): {e.response.text}")
-                    except Exception as e:
-                        st.error(f"Perplexity error: {e}")
-
-if st.session_state["syracuse_data"] is not None or st.session_state["perplexity_articles"] is not None:
-    col_left, col_right = st.columns(2)
-
-    with col_left:
-        st.subheader("Syracuse")
-        if st.session_state["syracuse_data"] is not None:
-            st.caption(f"Query took {st.session_state.get('syracuse_elapsed', 0):.1f}s")
-            render_syracuse_results(st.session_state["syracuse_data"])
-
-    with col_right:
-        st.subheader("Perplexity")
-        if st.session_state["perplexity_articles"] is not None:
-            st.caption(f"Query took {st.session_state.get('perplexity_elapsed', 0):.1f}s")
-            render_perplexity_results(st.session_state["perplexity_articles"])
+if providers_with_results:
+    for col, provider in zip(st.columns(len(providers_with_results)), providers_with_results):
+        with col:
+            st.subheader(provider["label"])
+            elapsed = st.session_state.get(f"{provider['key']}_elapsed", 0)
+            st.caption(f"Query took {elapsed:.1f}s")
+            RENDER_FUNCS[provider["key"]](st.session_state[provider["data_key"]])
