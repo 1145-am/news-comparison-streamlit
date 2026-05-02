@@ -22,11 +22,13 @@ def fetch_syracuse_story(uri: str) -> dict:
     return response.json()
 
 
-def fetch_syracuse(industry: str, location: str) -> dict:
+def fetch_syracuse(industry: str, location: str, industry_context: str = "") -> dict:
     headers = {"Authorization": f"Token {SYRACUSE_API_KEY}"}
-    params = {"days_ago": NUM_DAYS}
+    params: dict[str, str | int] | None = {"days_ago": NUM_DAYS}
     if industry and industry != "All":
         params["industry"] = industry
+    if industry_context:
+        params["industry_context"] = industry_context
     if location and location != "All":
         params["location"] = location
     all_results = []
@@ -111,26 +113,28 @@ def _run_perplexity_query(system_prompt: str, user_prompt: str) -> list:
     return sorted(articles, key=lambda x: x.get("published_date", ""), reverse=True)
 
 
-def fetch_perplexity(industry: str, location: str) -> list:
+def fetch_perplexity(industry: str, location: str, industry_context: str = "") -> list:
     effective_industry = ", ".join(CATEGORIES.keys()) if industry == "All" else industry
     effective_location = ", ".join(LOCATIONS) if location == "All" else location
 
+    effective_industry_display = f"{effective_industry} ({industry_context})" if industry_context else effective_industry
+
     if ',' in effective_industry:
-        industries_text = f"the following industries: {effective_industry}"
-        industry_context = "these industries"
+        industries_text = f"the following industries: {effective_industry_display}"
+        industry_ref = "these industries"
     else:
-        industries_text = effective_industry
-        industry_context = "this industry"
+        industries_text = effective_industry_display
+        industry_ref = "this industry"
 
     locations_text = f"the following locations: {effective_location}" if ',' in effective_location else effective_location
 
     system_prompt = (
         f"You are a market research analyst with deep knowledge of what a "
-        f"procurement category manager in the {effective_industry} industry needs."
+        f"procurement category manager in the {effective_industry_display} industry needs."
     )
     user_prompt = (
         f"I am a procurement category manager for {industries_text} in {locations_text}. "
-        f"First identify top 5-7 suppliers in {industry_context}, then find recent news about them "
+        f"First identify top 5-7 suppliers in {industry_ref}, then find recent news about them "
         f"and relevant industry news. "
         f"Focus on finance, partnerships, innovations, risks, and regulatory changes "
         f"for procurement strategy and supplier negotiations. "
@@ -188,11 +192,12 @@ def _run_exa_query(query: str) -> list:
     return sorted(articles, key=lambda x: x.get("published_date", ""), reverse=True)
 
 
-def fetch_exa(industry: str, location: str) -> list:
+def fetch_exa(industry: str, location: str, industry_context: str = "") -> list:
     effective_industry = ", ".join(CATEGORIES.keys()) if industry == "All" else industry
     effective_location = ", ".join(LOCATIONS) if location == "All" else location
+    effective_industry_display = f"{effective_industry} ({industry_context})" if industry_context else effective_industry
     query = (
-        f"Fetch recent news related to the {effective_industry} industry in {effective_location}. "
+        f"Fetch recent news related to the {effective_industry_display} industry in {effective_location}. "
         "Focus on market trends, regulatory updates, major deals, innovations, and key players. "
         "Only include content from credible business, trade, or regional news sources."
     )
@@ -261,11 +266,12 @@ def _run_linkup_query(query: str) -> list:
     return sorted(articles, key=lambda x: x.get("published_date", ""), reverse=True)
 
 
-def fetch_linkup(industry: str, location: str) -> list:
+def fetch_linkup(industry: str, location: str, industry_context: str = "") -> list:
     effective_industry = ", ".join(CATEGORIES.keys()) if industry == "All" else industry
     effective_location = ", ".join(LOCATIONS) if location == "All" else location
+    effective_industry_display = f"{effective_industry} ({industry_context})" if industry_context else effective_industry
     query = (
-        f"Fetch recent news related to the {effective_industry} industry in {effective_location}. "
+        f"Fetch recent news related to the {effective_industry_display} industry in {effective_location}. "
         "Focus on market trends, regulatory updates, major deals, innovations, and key players. "
         "Return source titles, publication dates, and a short summary for each news item. "
         "Only include content from credible business, trade, or regional news sources."

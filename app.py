@@ -101,23 +101,39 @@ RENDER_FUNCS = {
 def pick_random_category(categories):
     tops = list(categories.keys())
     if not tops:
-        return ""
-    if random.random() < 0.5:
+        return "", ""
+    rand = random.random()
+    if rand < 0.33:
         top = random.choice(tops)
         second_map = categories[top]
         children = list(second_map.keys()) if isinstance(second_map, dict) else []
-        sample = random.sample(children, min(3, len(children))) if children else []
-        return f"{top} ({', '.join(sample)})" if sample else top
+        sample = random.sample(children, min(3, len(children)))
+        return top, ", ".join(sample)
+    elif rand < 0.67:
+        top = random.choice(tops)
+        second_map = categories[top]
+        if not isinstance(second_map, dict) or not second_map:
+            return top, ""
+        second = random.choice(list(second_map.keys()))
+        leaves = second_map.get(second, [])
+        sample = random.sample(leaves, min(3, len(leaves))) if leaves else []
+        return second, ", ".join(sample)
     else:
         top = random.choice(tops)
         second_map = categories[top]
         if not isinstance(second_map, dict) or not second_map:
-            return top
+            return top, ""
         second = random.choice(list(second_map.keys()))
         leaves = second_map.get(second, [])
         if not leaves:
-            return f"{second} ({top})"
-        return f"{random.choice(leaves)} ({top} - {second})"
+            context = top if top.lower() not in second.lower() else ""
+            return second, context
+        leaf = random.choice(leaves)
+        leaf_lower = leaf.lower()
+        for ancestor in [second, top]:
+            if ancestor.lower() not in leaf_lower:
+                return leaf, ancestor
+        return leaf, ""
 
 
 # --- Session state ---
@@ -126,6 +142,7 @@ _STATE_DEFAULTS = {
     "search_mode": "Category",
     "company_text": "",
     "category_text": "",
+    "category_context_text": "",
     "all_industries": False,
     "all_locations": False,
     "location": LOCATIONS[0] if LOCATIONS else "",
@@ -162,19 +179,25 @@ with st.sidebar:
 search_mode = st.radio("Search by", ["Category", "Company"], horizontal=True, key="search_mode")
 
 if search_mode == "Category":
-    st.button("Randomize", on_click=lambda: st.session_state.update({
-        "category_text": pick_random_category(CATEGORIES),
-        "location": random.choice(LOCATIONS) if LOCATIONS else "",
-        "all_industries": False,
-        "all_locations": False,
-    }))
+    def _randomize_category():
+        cat, ctx = pick_random_category(CATEGORIES)
+        st.session_state.update({
+            "category_text": cat,
+            "category_context_text": ctx,
+            "location": random.choice(LOCATIONS) if LOCATIONS else "",
+            "all_industries": False,
+            "all_locations": False,
+        })
+    st.button("Randomize", on_click=_randomize_category)
 
-    col_category, col_in, col_location = st.columns([6, 0.3, 2])
+    col_category, col_context, col_in, col_location = st.columns([3, 3, 0.3, 2])
     st.markdown("Feel free to change the category and location how you want.")
 
     with col_category:
         st.text_input("Category", key="category_text", disabled=st.session_state["all_industries"])
         st.checkbox("All industries", key="all_industries")
+    with col_context:
+        st.text_input("Category Context", key="category_context_text", disabled=st.session_state["all_industries"])
     with col_in:
         st.markdown("<div style='padding-top:2.35rem; text-align:center;'>in</div>", unsafe_allow_html=True)
     with col_location:
@@ -211,7 +234,8 @@ if st.button("Get News", disabled=get_news_disabled or not active_providers):
                     else:
                         industry = "All" if st.session_state["all_industries"] else st.session_state["category_text"].strip()
                         location = "All" if st.session_state["all_locations"] else st.session_state["location"]
-                        result = provider["fetch_category"](industry, location)
+                        industry_context = "" if st.session_state["all_industries"] else st.session_state["category_context_text"].strip()
+                        result = provider["fetch_category"](industry, location, industry_context)
                     st.session_state[provider["data_key"]] = result
                     st.session_state[f"{provider['key']}_elapsed"] = time.time() - t0
                 except httpx.HTTPStatusError as e:
