@@ -24,13 +24,13 @@ def fetch_syracuse_story(uri: str) -> dict:
 
 def fetch_syracuse(industry: str, location: str, industry_context: str = "") -> dict:
     headers = {"Authorization": f"Token {SYRACUSE_API_KEY}"}
-    params: dict[str, str | int] | None = {"days_ago": NUM_DAYS}
+    params: list | None = [("days_ago", str(NUM_DAYS))]
     if industry and industry != "All":
-        params["industry"] = industry
-    if industry_context:
-        params["industry_context"] = industry_context
+        params.append(("industry", industry))
+    for ctx in [c.strip() for c in industry_context.split(",") if c.strip()]:
+        params.append(("industry_context", ctx))
     if location and location != "All":
-        params["location"] = location
+        params.append(("location", location))
     all_results = []
 
     url = f"{SYRACUSE_BASE_URL}/api/v1/stories/industry-location/"
@@ -72,18 +72,24 @@ _PERPLEXITY_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
         "schema": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "headline": {"type": "string"},
-                    "summary_text": {"type": "string"},
-                    "published_date": {"type": "string", "format": "date-time"},
-                    "published_by": {"type": "string"},
-                    "document_url": {"type": "string"},
-                },
-                "required": ["headline", "summary_text", "published_date", "published_by", "document_url"],
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "headline": {"type": "string"},
+                            "summary_text": {"type": "string"},
+                            "published_date": {"type": "string", "format": "date-time"},
+                            "published_by": {"type": "string"},
+                            "document_url": {"type": "string"},
+                        },
+                        "required": ["headline", "summary_text", "published_date", "published_by", "document_url"],
+                    },
+                }
             },
+            "required": ["items"],
         },
     },
 }
@@ -109,7 +115,7 @@ def _run_perplexity_query(system_prompt: str, user_prompt: str) -> list:
     )
     response.raise_for_status()
     content = response.json()["choices"][0]["message"]["content"]
-    articles = json.loads(content)
+    articles = json.loads(content)["items"]
     return sorted(articles, key=lambda x: x.get("published_date", ""), reverse=True)
 
 
